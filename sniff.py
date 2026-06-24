@@ -1,27 +1,75 @@
-from scapy.all import sniff, IP, TCP, UDP
+from scapy.all import sniff, IP, TCP, UDP, conf
 import argparse
+import time
+
+
+FLAGS = {
+    'F': "FIN",
+    'S': "SYN",
+    'R': "RST",
+    'P': "PSH",
+    'A': "ACK",
+    'U': "URG",
+    'E': "ECE",
+    'C': "CWR",
+    'N': "NS"
+}
+
+ROUTER_IP = conf.route.route("0.0.0.0")[2]
+
+def getFlags(flags):
+    r = ''
+    for f in flags:
+        r += FLAGS.get(f, f) + ' / '
+    return r[:-2]
+
 
 def process_packet(packet):
     if IP in packet:
         src = packet[IP].src
         dst = packet[IP].dst
         if TCP in packet:
-            print(f"[ TCP ] {src}:{packet[TCP].sport} -> {dst}:{packet[TCP].dport}")
-
+            print(f"[ TCP ] {src}:{packet[TCP].sport} -> {dst}:{packet[TCP].dport} | Flags: {getFlags(packet[TCP].flags)}")
+            if packet[TCP].sport == 80 or packet[TCP].dport == 80:
+                print("[ Alert ]Unencrypted HTTP traffic in/out Port 80")
         elif UDP in packet:
             print(f"[ UDP ] {src}:{packet[UDP].sport} -> {dst}:{packet[UDP].dport}")
+            if (packet[UDP].dport == 53 or packet[UDP].sport == 53) and dst != ROUTER_IP and src != ROUTER_IP:
+                print(f"[ Alert ] Suspicious DNS traffic: {src} -> {dst}")
         else:
-            # [OTHER] src -> dst, no ports
             print(f"[ OTHER ] {src} -> {dst}")
 
+scan_tracker = {}
+def scan_detection(packet):
+    if IP in packet and TCP in packet and packet[TCP].flags in ('S', 'SA', 'A'):
+        src_ip = packet[IP].src
+        dst_port = packet[TCP].dport
+        now = time.time()
 
+        if src_ip not in scan_tracker:
+            scan_tracker[src_ip] = {"ports": set(), "first_seen": now}
+        
+        scan_tracker[src_ip]["ports"].add(dst_port)
+
+        time_window = now - scan_tracker[src_ip]["first_seen"]
+        port_count = len(scan_tracker[src_ip]["ports"])
+
+        if port_count > 10 and time_window < 1.1:
+            print(f"[ALERT] Port scan detected from {src_ip} — {port_count} ports in {time_window:.1f}s")
+            scan_tracker[src_ip]["alerted"] = True
 
 
 def main():
     parser = argparse.ArgumentParser(description="Packet Sniffer")
     parser.add_argument("--filter", type=str, default=None, help="BPF filter string")
     parser.add_argument("--count", type=int, default=0, help="Number of packets (0 = infinite)")
+    parser.add_argument("--scan-detection", type=bool, default=False, help="Detect port scans using SYN packets")
     args = parser.parse_args()
+
+    if args.scan_detection:
+        print("Scan detection ..., Monitoring for SYN packets...")
+        sniff(prn=scan_detection)
+        return  
 
     print(f"Starting capture... filter={args.filter or 'none'}")
     packets = sniff(filter=args.filter, count=args.count, prn=process_packet)
