@@ -1,5 +1,6 @@
 from scapy.all import sniff, IP, TCP, UDP, conf
 import argparse
+import datetime
 import time
 
 
@@ -23,21 +24,32 @@ def getFlags(flags):
         r += FLAGS.get(f, f) + ' / '
     return r[:-2]
 
+def log(s):
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = now + '  ' + s
+    filename = 'record.log'
+    with open(filename, "a") as file:
+        file.write(line)
+    
 
 def process_packet(packet):
     if IP in packet:
         src = packet[IP].src
         dst = packet[IP].dst
+        msg = ''
         if TCP in packet:
-            print(f"[ TCP ] {src}:{packet[TCP].sport} -> {dst}:{packet[TCP].dport} | Flags: {getFlags(packet[TCP].flags)}")
+            msg = f"[ TCP ] {src}:{packet[TCP].sport} -> {dst}:{packet[TCP].dport} | Flags: {getFlags(packet[TCP].flags)}"
             if packet[TCP].sport == 80 or packet[TCP].dport == 80:
-                print("[ Alert ]Unencrypted HTTP traffic in/out Port 80")
+                msg += "\n[ Alert ] Unencrypted HTTP traffic"
         elif UDP in packet:
-            print(f"[ UDP ] {src}:{packet[UDP].sport} -> {dst}:{packet[UDP].dport}")
+            msg = f"[ UDP ] {src}:{packet[UDP].sport} -> {dst}:{packet[UDP].dport}"
             if (packet[UDP].dport == 53 or packet[UDP].sport == 53) and dst != ROUTER_IP and src != ROUTER_IP:
-                print(f"[ Alert ] Suspicious DNS traffic: {src} -> {dst}")
+                msg = f"[ Alert ] Suspicious DNS traffic: {src} -> {dst}"
         else:
-            print(f"[ OTHER ] {src} -> {dst}")
+            msg = f"[ OTHER ] {src} -> {dst}"
+        msg += '\n'
+        print(msg, end='')
+        log(msg)
 
 scan_tracker = {}
 def scan_detection(packet):
@@ -55,8 +67,9 @@ def scan_detection(packet):
         port_count = len(scan_tracker[src_ip]["ports"])
 
         if port_count > 10 and time_window < 1.1:
-            print(f"[ALERT] Port scan detected from {src_ip} — {port_count} ports in {time_window:.1f}s")
+            msg = f"[ALERT] Port scan detected from {src_ip} — {port_count} ports in {time_window:.1f}s"
             scan_tracker[src_ip]["alerted"] = True
+            log(msg)
 
 
 def main():
